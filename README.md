@@ -1,9 +1,15 @@
-# NOTICE  
-I have not recently had the time to maintain and bug fix this project. I am seeking for a developer that is willing to maintain this project and potentially implement new features. Please reach out to me at mkubiak.dev at gmail dot com if you are interested in assisting with the project and have experience with Python.  
+> This is a fork from the **no longer maintained** [markubiak/wallpaper-reddit](https://github.com/markubiak/wallpaper-reddit)
 
 # wallpaper-reddit
 ## About
-wallpaper-reddit is a Python 3 program that sets your wallpaper to the top image of one or multiple subreddits.  Version 3 has introduced many changes, such as the removal of all external dependencies, automatic DE detection for wallpaper setting, and proper setup using setuptools.  
+wallpaper-reddit is a Python 3 program that sets your wallpaper to the top image of one or multiple subreddits.
+
+## Changes
+* I Merged the abandoned v4 branch into master which introduced changes to the config files and is now XDG compliant.
+* I intend to change the naming scheme of the save option to a date related one.
+
+## Please Note
+This configuration file is based on an old version of the project and some changes from v4 aren't mentiond here yet, I may add these changes in the future.
 
 ## Installation
 RPMs for Fedora 23, Fedora 24, Ubuntu 16.04/Linux Mint 18 can be found on the [Releases Page] (https://github.com/markubiak/wallpaper-reddit/releases)  
