@@ -1,5 +1,5 @@
 """wallpaper-reddit package"""
 
-from wpreddit import main
+from .core import run
 if __name__ == '__main__':
-    main.run()
+    run()

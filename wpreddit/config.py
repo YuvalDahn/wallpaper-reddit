@@ -1,198 +1,249 @@
 import argparse
 import configparser
+import logging
 import os
 import platform
-import sys
 from pkg_resources import resource_string
 
-# global vars
-verbose = False
-startup = False
-autostartup = False
-force_dl = False
-startupinterval = 0
-startupattempts = 0
-save = False
-subs = []
-minwidth = 0
-minheight = 0
-minratio = 0.0
-titlesize = 0
-titlealign_x = ""
-titlealign_y = ""
-titleoffset_x = 0
-titleoffset_y = 0
-maxlinks = 0
-resize = False
-settitle = False
-randomsub = False
-blacklistcurrent = False
-setcmd = ''
-walldir = ''
-confdir = ''
-savedir = ''
-sortby = ''
-opsys = platform.system()
+from .common import exit_msg
+
+
+# global config dictionary, init to working defaults
+cfg = {
+    'mode': "normal",
+    'subs': ["earthporn", "spaceporn", "skyporn", "imaginarystarscapes"],
+    'sorting_alg': "hot",
+    'random_sub': False,
+    'force_download': False,
+    'max_links': 20,
+    'resize': False,
+    'os': "",
+    'set_command': "",
+    'external_script': "/external.sh",
+    'dirs': {
+        'data': "",
+        'config': "",
+        'save': ""
+    },
+    'startup': {
+        'interval': 3,
+        'attempts': 10
+    },
+    'min_dimensions': {
+        'width': 1920,
+        'height': 1080,
+        'ratio': 0.0
+    },
+    'title': {
+        'set': False,
+        'size_px': 24,
+        'align_x': "right",
+        'align_y': "top",
+        'offset_x_px': 5,
+        'offset_y_px': 5
+    }
+}
 
 
 def init_config():
-    global walldir
-    global confdir
-    if opsys == "Windows":
-        walldir = os.path.expanduser("~/Wallpaper-Reddit")
-        confdir = os.path.expanduser("~/Wallpaper-Reddit/config")
+
+    cfg['os'] = platform.system()
+
+    # Get the full path of the directory per platform
+    if cfg['os'] == "Linux":
+        xdg_config = os.getenv('XDG_CONFIG_HOME')
+        xdg_data = os.getenv('XDG_DATA_HOME')
+        if xdg_config is not None:
+            cfg['dirs']['config'] = os.path.expanduser(xdg_config + "/wallpaper-reddit")
+        else:
+            cfg['dirs']['config'] = os.path.expanduser("~/.config/wallpaper-reddit")
+        if xdg_data is not None:
+            cfg['dirs']['data'] =  os.path.expanduser(xdg_data + "/wallpaper-reddit")
+        else:
+            cfg['dirs']['data'] = os.path.expanduser("~/.local/share/wallpaper-reddit")
+    elif cfg['os'] == "Windows":
+        appdata = os.getenv("APPDATA")
+        cfg['dirs']['config'] = os.path.expanduser(appdata + "/wallpaper-reddit/config")
+        cfg['dirs']['data'] = os.path.expanduser(appdata + "/wallpaper-reddit/data")
+    elif cfg['os'] == "Darwin":
+        cfg['dirs']['config'] = os.path.expanduser("~/Library/Preferences/wallpaper-reddit")
+        cfg['dirs']['data'] = os.path.expanduser("~/Library/Application Support/wallpaper-reddit")
     else:
-        walldir = os.path.expanduser("~/.wallpaper")
-        confdir = os.path.expanduser("~/.config/wallpaper-reddit")
-    if not os.path.exists(walldir):
-        os.makedirs(walldir)
-        log(walldir + " created")
-    if not os.path.exists(walldir + '/blacklist.txt'):
-        with open(walldir + '/blacklist.txt', 'w') as blacklist:
+        exit_msg("Operating system \"" + cfg['os'] + "\" incorrectly identified or unsupported.")
+
+    # Make the paths if they are nonexistent
+    if not os.path.exists(cfg['dirs']['data']):
+        os.makedirs(cfg['dirs']['data'])
+        logging.info(cfg['dirs']['data'] + " created")
+    if not os.path.exists(cfg['dirs']['config']):
+        os.makedirs(cfg['dirs']['config'])
+        logging.info(cfg['dirs']['config'] + " created")
+
+    # Create empty versions of specific files if necessary
+    if not os.path.exists(cfg['dirs']['data'] + '/blacklist.txt'):
+        with open(cfg['dirs']['data'] + '/blacklist.txt', 'w') as blacklist:
             blacklist.write('')
-    if not os.path.exists(walldir + '/url.txt'):
-        with open(walldir + '/url.txt', 'w') as urlfile:
+    if not os.path.exists(cfg['dirs']['data'] + '/url.txt'):
+        with open(cfg['dirs']['data'] + '/url.txt', 'w') as urlfile:
             urlfile.write('')
-    if not os.path.exists(walldir + '/fonts'):
-        os.makedirs(walldir + '/fonts')
-    if not os.path.exists(walldir + '/fonts/Cantarell-Regular.otf'):
-        with open(walldir + '/fonts/Cantarell-Regular.otf', 'wb') as font:
+    if not os.path.exists(cfg['dirs']['data'] + '/fonts'):
+        os.makedirs(cfg['dirs']['data'] + '/fonts')
+    if not os.path.exists(cfg['dirs']['data'] + '/fonts/Cantarell-Regular.otf'):
+        with open(cfg['dirs']['data'] + '/fonts/Cantarell-Regular.otf', 'wb') as font:
             font.write(resource_string(__name__, 'fonts/Cantarell-Regular.otf'))
-    if not os.path.exists(confdir):
-        os.makedirs(confdir)
-        log(confdir + " created")
-    if not os.path.isfile(confdir + '/wallpaper-reddit.conf'):
-        if opsys == 'Windows':
+    if not os.path.isfile(cfg['dirs']['config'] + '/wallpaper-reddit.conf'):
+        if cfg['os'] == 'Windows':
             cfile = resource_string(__name__, 'conf_files/windows.conf')
         else:
             cfile = resource_string(__name__, 'conf_files/unix.conf')
-        with open(confdir + '/wallpaper-reddit.conf', 'wb') as f:
+        with open(cfg['dirs']['config'] + '/wallpaper-reddit.conf', 'wb') as f:
             f.write(cfile)
+
+    # Get the configuration, start with cfg files and use args as overrides
     parse_config()
     parse_args()
-    log("config and args parsed")
+    logging.info("config and args parsed")
 
 
-# reads the configuration at ~/.config/wallpaper-reddit
+# reads the configuration file
 def parse_config():
+
+    # read the config and check the version
     config = configparser.ConfigParser()
-    config.read(confdir + '/wallpaper-reddit.conf')
-    global subs
-    global maxlinks
-    global minheight
-    global minwidth
-    global minratio
-    global settitle
-    global titlesize
-    global titlealign_x
-    global titlealign_y
-    global titleoffset_x
-    global titleoffset_y
-    global resize
-    global setcmd
-    global startupinterval
-    global startupattempts
-    global savedir
-    global randomsub
-    global lottery
-    global sortby
-    if config.get('Title Overlay', 'titlegravity', fallback=None) is not None:
-        print("You are using an old (pre v3) configuration file.  Please delete your config file at " + confdir +
-              " and let the program create a new one.")
-        sys.exit(1)
-    subs = config.get('Options', 'subs', fallback='earthporn,spaceporn,skyporn,technologyporn,imaginarystarscapes')
-    subs = [x.strip() for x in subs.split(',')]
-    maxlinks = config.getint('Options', 'maxlinks', fallback=20)
-    minwidth = config.getint('Options', 'minwidth', fallback=1920)
-    minheight = config.getint('Options', 'minheight', fallback=1080)
-    minratio = config.getfloat('Options', 'minratio', fallback=0.0)
-    resize = config.getboolean('Options', 'resize', fallback=True)
-    randomsub = config.getboolean('Options', 'random', fallback=False)
-    lottery = config.getboolean('Options', 'lottery', fallback=False)
-    sortby = config.get('Options', 'sortby', fallback="hot")
-    setcmd = config.get('SetCommand', 'setcommand', fallback='')
-    settitle = config.getboolean('Title Overlay', 'settitle', fallback=False)
-    titlesize = config.getint('Title Overlay', 'titlesize', fallback=24)
-    titlealign_x = config.get('Title Overlay', 'titlealignx', fallback='right').lower()
-    titlealign_y = config.get('Title Overlay', 'titlealigny', fallback='top').lower()
-    titleoffset_x = config.getint('Title Overlay', 'titleoffsetx', fallback=5)
-    titleoffset_y = config.getint('Title Overlay', 'titleoffsety', fallback=5)
-    startupinterval = config.getint('Startup', 'interval', fallback=3)
-    startupattempts = config.getint('Startup', 'attempts', fallback=10)
+    config.read(cfg['dirs']['config'] + '/wallpaper-reddit.conf')
+    if config.get('misc', 'version', fallback="0") is not "4":
+        exit_msg("You are using an old configuration file.  Please delete your config file in " +
+                 cfg['dirs']['config'] + " and let the program create a new one.")
 
-    def get_default_savedir():
-        if opsys == 'Windows':
-            return "~/My Pictures/Wallpapers"
-        else:
-            return "~/Pictures/Wallpapers"
+    # core
+    subs = [x.strip() for x in config.get('core', 'subs').split(',')]
+    random_sub = config.getboolean('core', 'random_sub')
+    sorting_alg = config.get('core', 'sorting_alg')
+    max_links = config.getint('core', 'max_links')
+    resize = config.getboolean('core', 'resize')
+    set_command = config.get('core', 'set_command')
+    if subs is not None:
+        cfg['subs'] = subs
+    if random_sub is not None:
+        cfg['random_sub'] = random_sub
+    if sorting_alg is not None:
+        cfg['sorting_alg'] = sorting_alg
+    if max_links is not None:
+        cfg['max_links'] = max_links
+    if resize is not None:
+        cfg['resize'] = resize
+    if set_command is not None:
+        cfg['set_command'] = set_command
 
-    savedir = os.path.expanduser(config.get('Save', 'directory', fallback=get_default_savedir()))
+    # min dimensions
+    min_width = config.getint('min_dimensions', 'width')
+    min_height = config.getint('min_dimensions', 'height')
+    min_ratio = config.getfloat('min_dimensions', 'ratio')
+    if min_width is not None:
+        cfg['min_dimensions']['width'] = min_width
+    if min_height is not None:
+        cfg['min_dimensions']['height'] = min_height
+    if min_ratio is not None:
+        cfg['min_dimensions']['ratio'] = min_ratio
+
+    # title overlay
+    set_title = config.getboolean('title', 'set')
+    size_px = config.getint('title', 'size_px')
+    align_x = config.get('title', 'align_x')
+    align_y = config.get('title', 'align_y')
+    offset_x_px = config.getint('title', 'offset_x_px')
+    offset_y_px = config.getint('title', 'offset_y_px')
+    if set_title is not None:
+        cfg['title']['set'] = set_title
+    if size_px is not None:
+        cfg['title']['size_px'] = size_px
+    if align_x is not None:
+        cfg['title']['align_x'] = align_x
+    if align_y is not None:
+        cfg['title']['align_y'] = align_y
+    if offset_x_px is not None:
+        cfg['title']['offset_x_px'] = offset_x_px
+    if offset_y_px is not None:
+        cfg['title']['offset_y_px'] = offset_y_px
+
+    # startup
+    interval = config.getint('startup', 'interval')
+    attempts = config.getint('startup', 'attempts')
+    if interval is not None:
+        cfg['startup']['interval'] = interval
+    if attempts is not None:
+        cfg['startup']['attempts'] = attempts
+
+    # save
+    if cfg['os'] == 'Windows':
+        default_save_dir = "~/My Pictures/Wallpapers"
+    else:
+        default_save_dir = "~/Pictures/Wallpapers"
+    cfg['dirs']['save'] = os.path.expanduser(config.get(
+        'Save', 'directory', fallback=default_save_dir))
 
 
 # parses command-line arguments and stores them to proper global variables
 def parse_args():
-    sort_by_values = ["hot", "new", "controversial", "top", "rising"]
-    parser = argparse.ArgumentParser(description="Pulls wallpapers from specified subreddits in reddit.com")
-    parser.add_argument("subreddits", help="subreddits to check for wallpapers", nargs="*")
-    parser.add_argument("-v", "--verbose", help="increases program verbosity", action="store_true")
+    # parsing configuration
+    sort_alg_values = ["hot", "new", "controversial", "top", "rising"]
+    parser = argparse.ArgumentParser(description="Pulls wallpapers from subreddits of reddit.com")
+    parser.add_argument("subreddits",
+                        help="subreddits to check for wallpapers",
+                        nargs="*")
+    parser.add_argument("-v", "--verbose",
+                        help="increases program verbosity",
+                        action="store_true")
     parser.add_argument("-f", "--force",
-                        help="forces wallpapers to re-download even if it has the same url as the current wallpaper",
+                        help="forces wallpapers to re-download and ignores optimizations",
                         action="store_true")
-    parser.add_argument("--startup", help="runs the program as a startup application, waiting on internet connection",
+    parser.add_argument("--startup",
+                        help="runs the program as a startup application, waiting on internet connection",
                         action="store_true")
-    parser.add_argument("--auto-startup", help="sets the program to automatically run on every login (Linux only)",
+    parser.add_argument("--autostart",
+                        help="sets the program to automatically run on every desktop login (Linux only)",
                         action="store_true")
     parser.add_argument("--save",
-                        help='saves the current wallpaper (does not download a wallpaper)',
+                        help='saves the current wallpaper to ' + cfg['dirs']['save'],
                         action="store_true")
-    parser.add_argument("--resize", help="resizes the image to the height and width specified in the config after "
+    parser.add_argument("--resize",
+                        help="resizes the image to the height and width specified in the config after "
                                          "wallpaper is set.  Enabled by default in the configuration file,",
                         action="store_true")
-    parser.add_argument("-b", "--blacklist", help="blacklists the current wallpaper and downloads a new wallpaper",
+    parser.add_argument("--blacklist",
+                        help="blacklists the current wallpaper and downloads a new wallpaper",
                         action="store_true")
-    parser.add_argument("-s", "--sort-by", help="choose Reddit's sorting algorithm from {} (default=hot)".format(sort_by_values))
+    parser.add_argument("-s", "--sort-alg",
+                        help="choose Reddit's sorting algorithm from {} (default=hot)".format(sort_alg_values))
     parser.add_argument("--random",
-                        help="will pick a random subreddit from the ones provided instead of turning them into a multireddit",
+                        help="will pick a random subreddit instead of turning them into a multireddit",
                         action="store_true")
-    parser.add_argument("--settitle", help="write title over the image", action="store_true")
-    parser.add_argument("--lottery", help="select a random image from a subreddit instead of the newest", action="store_true")
- 
+    parser.add_argument("--set-title",
+                        help="write title over the image",
+                        action="store_true")
+
     args = parser.parse_args()
-    global subs
-    global verbose
-    global save
-    global force_dl
-    global startup
-    global autostartup
-    global resize
-    global settitle
-    global randomsub
-    global blacklistcurrent
-    global lottery
-    global sortby
     if not args.subreddits == []:
-        subs = args.subreddits
-    verbose = args.verbose
-    save = args.save
-    startup = args.startup
-    autostartup = args.auto_startup
-    force_dl = args.force
+        cfg['subs'] = args.subreddits
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    cfg['force_download'] = args.force
+    # mode switch
+    if args.save:
+        cfg['mode'] = "save_current"
+    elif args.startup:
+        cfg['mode'] = "startup"
+    elif args.autostart:
+        cfg['mode'] = "gen_autostart"
+    elif args.blacklist:
+        cfg['mode'] = "blacklist_current"
     if args.resize:
-        resize = True
-    if args.settitle:
-        settitle = True
+        cfg['resize'] = True
+    if args.set_title:
+        cfg['title']['set'] = True
     if args.random:
-        randomsub = True
-    if args.blacklist:
-        blacklistcurrent = True
-    if args.lottery:
-        lottery = True
-    if args.sort_by in sort_by_values:
-        sortby = args.sort_by
-
-# in - string - messages to print
-# takes a string and will print it as output if verbose
-def log(info):
-    if verbose:
-        print(info)
-
+        cfg['random_sub'] = True
+    if args.sort_alg in sort_alg_values:
+        cfg['sorting_alg'] = args.sort_alg

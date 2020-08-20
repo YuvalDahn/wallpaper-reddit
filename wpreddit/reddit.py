@@ -1,39 +1,38 @@
 import json
+import logging
 import os
 import random
 import re
+import requests
 import sys
 from PIL import Image
-from urllib import request
 
-from wpreddit import config, connection
+from .blacklist import Blacklist
+from .connection import connected
+from .config import cfg
+from .common import exit_msg
 
 
 # in - string[] - list of subreddits to get links from
 # out - [string, string, string][] - a list of links from the subreddits and their respective titles and permalinks
-# takes in subreddits, converts them to a reddit json url, and then picks out urls and their titles
 def get_links():
-    print("searching for valid images...")
-    if config.randomsub:
-        parsedsubs = pick_random(config.subs)
+    """Takes in subreddits, converts them to a reddit json url, and then picks out urls and their titles"""
+    logging.info("Searching for valid images...")
+    if cfg['random_sub']:
+        parsed_subs = random.choice(cfg['subs'])
     else:
-        parsedsubs = config.subs[0]
-        for sub in config.subs[1:]:
-            parsedsubs = parsedsubs + '+' + sub
-    url = "http://www.reddit.com/r/" + parsedsubs + "/" + config.sortby + ".json?limit=" + str(config.maxlinks)
-    config.log("Grabbing json file " + url)
-    uaurl = request.Request(url, headers={
-        'User-Agent': 'wallpaper-reddit python script, github.com/markubiak/wallpaper-reddit'})
-    response = request.urlopen(uaurl)
-    content = response.read().decode('utf-8')
+        parsed_subs = '+'.join(cfg['subs'])
+    url = "http://www.reddit.com/r/" + parsed_subs + "/" + cfg['sorting_alg'] + \
+          ".json?limit=" + str(cfg['max_links'])
+    logging.debug("Grabbing json file " + url)
+    r = requests.get(url, headers={'User-Agent': 'wallpaper-reddit python script: ' +
+                                                 'github.com/markubiak/wallpaper-reddit'})
+    data = json.loads("{}")  # warning suppression
     try:
-        data = json.loads(content)
+        data = json.loads(r.text)
     except (AttributeError, ValueError):
-        print(
-            'Was redirected from valid Reddit formatting. Likely a router redirect, such as a hotel or airport.'
-            'Exiting...')
-        sys.exit(0)
-    response.close()
+        exit_msg("Was redirected from valid Reddit formatting. Likely a router redirect, "
+                 "such as a hotel or airport. Exiting...")
     links = []
     for i in data["data"]["children"]:
         links.append([i["data"]["url"],
@@ -44,87 +43,54 @@ def get_links():
 
 # in - [string, string, string][] - list of links to check
 # out - [string, string, string] - first link to match all criteria with title and permalink
-# takes in a list of links and attempts to find the first one that is a direct image link,
-# is within the proper dimensions, and is not blacklisted
 def choose_valid(links):
+    """takes in a list of links and attempts to find the first one that is a direct image link,
+    is within the proper dimensions, and is not blacklisted"""
     if len(links) == 0:
-        print("No links were returned from any of those subreddits. Are they valid?")
-        sys.exit(1)
+        exit_msg("No links were returned from any of those subreddits. Are they valid?")
+    blacklist = Blacklist(cfg['dirs']['data'] + '/blacklist.txt')
     for i, origlink in enumerate(links):
         link = origlink[0]
-        config.log("checking link # {0}: {1}".format(i, link))
+        logging.debug("checking link # {0}: {1}".format(i, link))
         if not (link[-4:] == '.png' or link[-4:] == '.jpg' or link[-5:] == '.jpeg'):
             if re.search('(imgur\.com)(?!/a/)', link):
                 link = link.replace("/gallery", "")
                 link += ".jpg"
             else:
                 continue
-        if not (connection.connected(link) and check_dimensions(link) and check_blacklist(link)):
+        if not connected(link) and check_dimensions(link) and not blacklist.is_blacklisted(link):
             continue
 
         def check_same_url(link):
-            with open(config.walldir + '/url.txt', 'r') as f:
-                currlink = f.read()
-                if currlink == link:
-                    print("current wallpaper is the most recent, will not re-download the same wallpaper.")
-                    sys.exit(0)
+            with open(cfg['dirs']['data'] + '/url.txt', 'r') as f:
+                curr_link = f.read()
+                if curr_link == link:
+                    exit_msg("current wallpaper is the most recent, will not re-download the same wallpaper.", code=0)
                 else:
                     return True
 
-        if config.force_dl or not (os.path.isfile(config.walldir + '/url.txt')) or check_same_url(link):
+        if cfg['force_download'] or not (os.path.isfile(cfg['dirs']['data'] + '/url.txt')) or check_same_url(link):
             return [link, origlink[1], origlink[2]]
-    print("No valid links were found from any of those subreddits.  Try increasing the maxlink parameter.")
-    sys.exit(0)
+    exit_msg("No valid links were found from any of those subreddits.  Try increasing the maxlink parameter.")
 
 
 # in - string - link to check dimensions of
 # out - boolean - if the link fits the proper dimensions
-# takes a link and checks to see if the link will match the minimum dimensions
 def check_dimensions(url):
-    resp = request.urlopen(request.Request(url, headers={
-        'User-Agent': 'wallpaper-reddit python script by /u/MarcusTheGreat7',
-        'Range': 'bytes=0-16384'
-    }))
+    """Takes a link and checks to see if the link will match the minimum dimensions"""
+    r = requests.get(url, headers={'User-Agent': 'wallpaper-reddit python script by /u/MarcusTheGreat7',
+                                                 'Range': 'bytes=0-16384'
+                                   },
+                     stream=True)
     try:
-        with Image.open(resp) as img:
+        with Image.open(r.raw) as img:
             dimensions = img.size
-            if (dimensions[0] / dimensions[1]) >= config.minratio:
-                if dimensions[0] >= config.minwidth and dimensions[1] >= config.minheight:
-                    config.log("Size checks out")
-                    return True
+            if (dimensions[0] / dimensions[1]) >= cfg['min_dimensions']['ratio'] and \
+                    dimensions[0] >= cfg['min_dimensions']['width'] and \
+                    dimensions[1] >= cfg['min_dimensions']['height']:
+                        logging.debug("Size checks out")
+                        return True
     except IOError:
-        config.log("Image dimensions could not be read")
+        logging.debug("Image dimensions could not be read")
     return False
 
-
-# in: a list of subreddits
-# out: the name of a random subreddit
-# will pick a random sub from a list of subreddits
-def pick_random(subreddits):
-    rand = random.randint(0, len(subreddits) - 1)
-    return subreddits[rand]
-
-
-# in - string - a url to match against the blacklist
-# out - boolean - whether the url is blacklisted
-# checks to see if the url is on the blacklist or not (True means the link is good)
-def check_blacklist(url):
-    with open(config.walldir + '/blacklist.txt', 'r') as blacklist:
-        bl_links = blacklist.read().split('\n')
-    for link in bl_links:
-        if link == url:
-            return False
-    return True
-
-
-# blacklists the current wallpaper, as listed in the ~/.wallpaper/url.txt file
-def blacklist_current():
-    if not os.path.isfile(config.walldir + '/url.txt'):
-        print(
-            'ERROR: ~/.wallpaper/url.txt does not exist.'
-            'wallpaper-reddit must run once before you can blacklist a wallpaper.')
-        sys.exit(1)
-    with open(config.walldir + '/url.txt', 'r') as urlfile:
-        url = urlfile.read()
-    with open(config.walldir + '/blacklist.txt', 'a') as blacklist:
-        blacklist.write(url + '\n')
