@@ -5,6 +5,7 @@ import random
 import re
 import shutil
 from subprocess import check_call, check_output, CalledProcessError
+from datetime import datetime
 
 from .common import exit_msg
 from .config import cfg
@@ -91,25 +92,21 @@ def save_wallpaper():
             f.write('Titles of the saved wallpapers:')
         logging.warning(cfg['dirs']['save'] + "/titles.txt did not exist and was created")
 
-    wp_count = 0
+    date = datetime.now().strftime('%Y%m%d-%H:%M')
     orig_path = cfg['dirs']['data']
     new_path = cfg['dirs']['save']
 
     if cfg['os'] == "Windows":
         orig_path = orig_path + '\\wallpaper.bmp'
-        while os.path.isfile(cfg['dirs']['save'] + '\\wallpaper' + str(wp_count) + '.bmp'):
-            wp_count += 1
-        new_path = new_path + ('\\wallpaper' + str(wp_count) + '.bmp')
+        new_path = new_path + ('\\' + date + '.bmp')
     else:
         orig_path = orig_path + '/wallpaper.jpg'
-        while os.path.isfile(cfg['dirs']['save'] + '/wallpaper' + str(wp_count) + '.jpg'):
-            wp_count += 1
-        new_path = new_path + '/wallpaper' + str(wp_count) + '.jpg'
+        new_path = new_path + '/' + date + '.jpg'
     shutil.copyfile(orig_path, new_path)
 
     with open(cfg['dirs']['data'] + '/title.txt', 'r') as f:
         title = f.read()
     with open(cfg['dirs']['save'] + '/titles.txt', 'a') as f:
-        f.write('\n' + 'wallpaper' + str(wp_count) + ': ' + title)
+        f.write('\n' + date + ': ' + title)
 
     logging.info("Current wallpaper saved to " + new_path)
